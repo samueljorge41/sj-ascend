@@ -1,0 +1,10 @@
+{
+  "name": "Setting",
+  "type": "object",
+  "properties": {
+    "groupings": {
+      "type": "string",
+      "default": "daily,weekly,monthly,quarterly,semester,yearly"
+    }
+  }
+}

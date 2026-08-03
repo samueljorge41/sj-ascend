@@ -1,0 +1,23 @@
+{
+  "name": "Client",
+  "type": "object",
+  "properties": {
+    "account_id": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "active": {
+      "type": "boolean",
+      "default": false
+    },
+    "logo_url": {
+      "type": "string",
+      "default": ""
+    }
+  },
+  "required": [
+    "account_id"
+  ]
+}
