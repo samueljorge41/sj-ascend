@@ -11,7 +11,6 @@ import ScrollToTop from './components/ScrollToTop';
 import LeadsDashboard from './pages/LeadsDashboard';
 import Settings from './pages/Settings';
 import ClientsOverview from './pages/ClientsOverview';
-import Dia from './pages/dia';
 import ClientManagement from './pages/ClientManagement';
 
 
@@ -48,7 +47,6 @@ const AuthenticatedApp = () => {
         {/* Add your page Route elements here */}
         <Route element={<AppLayout />}>
           <Route path="/" element={<LeadsDashboard />} />
-          <Route path="/dia" element={<Dia />} />
           <Route path="/clientes" element={<ClientsOverview />} />
           <Route path="/gestao-clientes" element={<ClientManagement />} />
           <Route path="/configuracoes" element={<Settings />} />
