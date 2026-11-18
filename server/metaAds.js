@@ -23,6 +23,8 @@ function getOverviewCache(accountId, since, until) {
         leads,
         cost_per_lead,
         balance,
+        balance_known,
+        is_prepay_account,
         status,
         updated_at
       FROM overview_cache
@@ -56,11 +58,13 @@ function saveOverviewCache(
       leads,
       cost_per_lead,
       balance,
+      balance_known,
+      is_prepay_account,
       status,
       updated_at
     )
     VALUES (
-      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
       CURRENT_TIMESTAMP
     )
 
@@ -73,6 +77,8 @@ function saveOverviewCache(
       leads = excluded.leads,
       cost_per_lead = excluded.cost_per_lead,
       balance = excluded.balance,
+      balance_known = excluded.balance_known,
+      is_prepay_account = excluded.is_prepay_account,
       status = excluded.status,
       updated_at = CURRENT_TIMESTAMP
   `).run(
@@ -86,6 +92,8 @@ function saveOverviewCache(
     Number(clientData.leads) || 0,
     Number(clientData.cost_per_lead) || 0,
     Number(clientData.balance) || 0,
+    clientData.balance_known ? 1 : 0,
+    clientData.is_prepay_account ? 1 : 0,
     String(clientData.status || "red")
   );
 
@@ -108,10 +116,131 @@ function formatCachedOverviewClient(cacheRecord) {
     cost_per_lead:
       Number(cacheRecord.cost_per_lead) || 0,
     balance: Number(cacheRecord.balance) || 0,
+    balance_known:
+      cacheRecord.balance_known !== 0,
+    is_prepay_account:
+      cacheRecord.is_prepay_account === 1,
     status: cacheRecord.status || "red",
     updated_at: cacheRecord.updated_at,
     from_cache: true,
   };
+}
+
+const PAYMENT_METHODS = new Set([
+  "auto",
+  "prepaid",
+  "credit_card",
+  "other",
+  "unknown",
+]);
+
+function getPaymentMethodSetting(accountId) {
+  const normalizedId = normalizeAccountId(accountId);
+  const registeredClient = db
+    .prepare(`
+      SELECT payment_method
+      FROM clients
+      WHERE REPLACE(account_id, 'act_', '') = ?
+      LIMIT 1
+    `)
+    .get(normalizedId);
+
+  const setting = registeredClient?.payment_method;
+
+  return PAYMENT_METHODS.has(setting)
+    ? setting
+    : "auto";
+}
+
+function applyPaymentMethod(client, setting) {
+  const paymentMethod =
+    setting === "auto"
+      ? client.is_prepay_account
+        ? "prepaid"
+        : "unknown"
+      : setting;
+
+  const hasActiveCampaigns =
+    client.status === "green" ||
+    client.status === "block";
+
+  let status = client.status;
+
+  if (hasActiveCampaigns) {
+    status =
+      paymentMethod === "prepaid" &&
+      client.balance_known &&
+      Number(client.balance) <= 0
+        ? "block"
+        : "green";
+  }
+
+  return {
+    ...client,
+    payment_method: paymentMethod,
+    payment_method_setting: setting,
+    status,
+  };
+}
+
+async function fetchOverviewAccount(
+  token,
+  apiBase,
+  metaAccount
+) {
+  const accountUrl =
+    `${apiBase}/${metaAccount}?fields=`;
+  const headers = {
+    Authorization: `Bearer ${token}`,
+  };
+
+  const response = await fetch(
+    `${accountUrl}spend_cap,amount_spent,currency,name,is_prepay_account`,
+    { headers }
+  );
+  const account = await response.json();
+
+  if (
+    response.ok &&
+    !account.error
+  ) {
+    return account;
+  }
+
+  const errorMessage = String(
+    account.error?.message || ""
+  );
+
+  if (
+    account.error?.code !== 100 ||
+    !errorMessage.toLowerCase().includes(
+      "is_prepay_account"
+    )
+  ) {
+    throw new Error(
+      errorMessage ||
+        "NÃ£o foi possÃ­vel buscar os dados da conta."
+    );
+  }
+
+  const fallbackResponse = await fetch(
+    `${accountUrl}spend_cap,amount_spent,currency,name`,
+    { headers }
+  );
+  const fallbackAccount =
+    await fallbackResponse.json();
+
+  if (
+    !fallbackResponse.ok ||
+    fallbackAccount.error
+  ) {
+    throw new Error(
+      fallbackAccount.error?.message ||
+        "NÃ£o foi possÃ­vel buscar os dados da conta."
+    );
+  }
+
+  return fallbackAccount;
 }
 
 const CONVERSATION_STARTED_TYPES = [
@@ -453,6 +582,9 @@ router.post("/overview", async (req, res) => {
 
     for (const id of account_ids) {
       try {
+        const paymentMethodSetting =
+          getPaymentMethodSetting(id);
+
         /*
          * Primeiro procura no SQLite.
          *
@@ -468,7 +600,10 @@ router.post("/overview", async (req, res) => {
 
           if (cached) {
             clients.push(
-              formatCachedOverviewClient(cached)
+              applyPaymentMethod(
+                formatCachedOverviewClient(cached),
+                paymentMethodSetting
+              )
             );
 
             continue;
@@ -528,27 +663,12 @@ router.post("/overview", async (req, res) => {
               status === "COMPLETED"
           );
 
-        const accountResponse = await fetch(
-          `${apiBase}/${metaAccount}?fields=spend_cap,amount_spent,currency,name`,
-          {
-            headers: {
-              Authorization: `Bearer ${token}`,
-            },
-          }
-        );
-
         const account =
-          await accountResponse.json();
-
-        if (
-          !accountResponse.ok ||
-          account.error
-        ) {
-          throw new Error(
-            account.error?.message ||
-              "Não foi possível buscar os dados da conta."
+          await fetchOverviewAccount(
+            token,
+            apiBase,
+            metaAccount
           );
-        }
 
         /*
          * Algumas contas podem não possuir spend_cap.
@@ -585,6 +705,11 @@ router.post("/overview", async (req, res) => {
           leads,
           cost_per_lead: costPerLead,
           balance,
+          balance_known: spendCap > 0,
+          is_prepay_account:
+            account.is_prepay_account === true ||
+            account.is_prepay_account === 1 ||
+            account.is_prepay_account === "1",
           status,
         };
 
@@ -600,12 +725,17 @@ router.post("/overview", async (req, res) => {
             freshClient
           );
 
-        clients.push({
-          ...formatCachedOverviewClient(
-            savedCache
-          ),
-          from_cache: false,
-        });
+        clients.push(
+          applyPaymentMethod(
+            {
+              ...formatCachedOverviewClient(
+                savedCache
+              ),
+              from_cache: false,
+            },
+            paymentMethodSetting
+          )
+        );
       } catch (error) {
         console.error(
           `Erro no overview da conta ${id}:`,
@@ -624,31 +754,43 @@ router.post("/overview", async (req, res) => {
           );
 
         if (fallbackCache) {
-          clients.push({
-            ...formatCachedOverviewClient(
-              fallbackCache
-            ),
-            stale: true,
-            error: error.message,
-          });
+          clients.push(
+            applyPaymentMethod(
+              {
+                ...formatCachedOverviewClient(
+                  fallbackCache
+                ),
+                stale: true,
+                error: error.message,
+              },
+              paymentMethodSetting
+            )
+          );
 
           continue;
         }
 
-        clients.push({
-          account_id: id,
-          name: "",
-          currency: "BRL",
-          spend: 0,
-          conversations: 0,
-          leads: 0,
-          cost_per_lead: 0,
-          balance: 0,
-          status: "red",
-          updated_at: null,
-          from_cache: false,
-          error: error.message,
-        });
+        clients.push(
+          applyPaymentMethod(
+            {
+              account_id: id,
+              name: "",
+              currency: "BRL",
+              spend: 0,
+              conversations: 0,
+              leads: 0,
+              cost_per_lead: 0,
+              balance: 0,
+              balance_known: false,
+              is_prepay_account: false,
+              status: "red",
+              updated_at: null,
+              from_cache: false,
+              error: error.message,
+            },
+            paymentMethodSetting
+          )
+        );
       }
     }
 

@@ -12,6 +12,13 @@ import LeadsDashboard from './pages/LeadsDashboard';
 import Settings from './pages/Settings';
 import ClientsOverview from './pages/ClientsOverview';
 import ClientManagement from './pages/ClientManagement';
+import Acquisition from './pages/Acquisition';
+import LifeOverview from './pages/LifeOverview';
+import Agenda from './pages/Agenda';
+import RelationshipReports from './pages/RelationshipReports';
+import Finance from './pages/Finance';
+import WhatsApp from './pages/WhatsApp';
+import Automations from './pages/Automations';
 
 
 import AppLayout from '@/components/AppLayout';
@@ -46,9 +53,16 @@ const AuthenticatedApp = () => {
       <Routes>
         {/* Add your page Route elements here */}
         <Route element={<AppLayout />}>
-          <Route path="/" element={<LeadsDashboard />} />
+          <Route path="/" element={<LifeOverview />} />
+          <Route path="/agenda" element={<Agenda />} />
+          <Route path="/negocio/dashboard" element={<LeadsDashboard />} />
           <Route path="/clientes" element={<ClientsOverview />} />
           <Route path="/gestao-clientes" element={<ClientManagement />} />
+          <Route path="/relatorios-relacionamento" element={<RelationshipReports />} />
+          <Route path="/financas" element={<Finance />} />
+          <Route path="/whatsapp" element={<WhatsApp />} />
+          <Route path="/automacoes" element={<Automations />} />
+          <Route path="/aquisicao" element={<Acquisition />} />
           <Route path="/configuracoes" element={<Settings />} />
         </Route>
         <Route path="*" element={<PageNotFound />} />

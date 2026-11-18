@@ -3,6 +3,7 @@ import React, {
   useState,
 } from "react";
 
+import { useSearchParams } from "react-router-dom";
 import {
   Building2,
   CalendarDays,
@@ -559,6 +560,7 @@ function CompactInfo({
 }
 
 export default function ClientManagement() {
+  const [searchParams] = useSearchParams();
   const {
     clients,
     clientOperations,
@@ -648,7 +650,7 @@ export default function ClientManagement() {
   const [
     quickView,
     setQuickView,
-  ] = useState("all");
+  ] = useState(searchParams.get("view") === "calendar" ? "calendar" : "all");
 
   const [
     calendarDate,

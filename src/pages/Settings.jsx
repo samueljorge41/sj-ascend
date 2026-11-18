@@ -1,12 +1,12 @@
 import React, {
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
 import {
   createClient,
-  removeClientLogo,
   updateClientById,
   uploadClientLogo,
 } from "@/api/systemClient";
@@ -19,7 +19,6 @@ import { GROUPINGS } from "@/lib/leadsGrouping";
 import {
   Building2,
   ChartNoAxesCombined,
-  ImagePlus,
   Loader2,
   Pencil,
   Plus,
@@ -38,56 +37,110 @@ const ORIGINS = [
 
 const EMPTY_FORM = {
   name: "",
-  origin: "",
+  origin: "SJ Marketing",
   account_id: "",
   active: true,
+  payment_method: "auto",
+  monthly_fee: "",
+  first_payment_date: "",
+  entry_date: "",
+  exit_date: "",
 };
 
-function getOriginBadgeClass(origin) {
-  if (origin === "Avaloon") {
-    return [
-      "border-orange-200",
-      "bg-orange-50",
-      "text-orange-700",
-      "dark:border-orange-900/60",
-      "dark:bg-orange-950/40",
-      "dark:text-orange-300",
-    ].join(" ");
-  }
+const PAYMENT_METHOD_LABELS = {
+  auto: "Automática (Meta)",
+  prepaid: "Saldo pré-pago",
+  credit_card: "Cartão de crédito",
+  other: "Outra forma de pagamento",
+  unknown: "Não identificado",
+};
 
-  if (origin === "SJ Marketing") {
-    return [
-      "border-blue-200",
-      "bg-blue-50",
-      "text-blue-700",
-      "dark:border-blue-900/60",
-      "dark:bg-blue-950/40",
-      "dark:text-blue-300",
-    ].join(" ");
-  }
-
-  return [
-    "border-border",
-    "bg-muted",
-    "text-muted-foreground",
-  ].join(" ");
+function getTodayDate() {
+  const today = new Date();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  return `${today.getFullYear()}-${month}-${day}`;
 }
 
-function getActiveBadgeClass(active) {
-  if (active) {
-    return [
-      "border-emerald-500/30",
-      "bg-emerald-500/10",
-      "text-emerald-700",
-      "dark:text-emerald-400",
-    ].join(" ");
+function formatMonthlyFee(value) {
+  if (value === null || value === undefined || value === "") {
+    return "";
   }
 
-  return [
-    "border-border",
-    "bg-muted",
-    "text-muted-foreground",
-  ].join(" ");
+  return new Intl.NumberFormat("pt-BR", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Number(value));
+}
+
+function parseMonthlyFee(value) {
+  const normalized = String(value || "")
+    .trim()
+    .replace(/^R\$\s*/i, "")
+    .replace(/\s/g, "");
+
+  if (!normalized) {
+    return null;
+  }
+
+  let decimalValue = normalized;
+  if (normalized.includes(",")) {
+    if (!/^\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?$|^\d+(?:,\d{1,2})?$/.test(normalized)) {
+      return undefined;
+    }
+    decimalValue = normalized.replace(/\./g, "").replace(",", ".");
+  } else if (/^\d{1,3}(?:\.\d{3})+$/.test(normalized)) {
+    decimalValue = normalized.replace(/\./g, "");
+  } else if (!/^\d+(?:\.\d{1,2})?$/.test(normalized)) {
+    return undefined;
+  }
+
+  const amount = Number(decimalValue);
+  return Number.isFinite(amount) && amount >= 0
+    ? Math.round(amount * 100) / 100
+    : undefined;
+}
+
+function parseFirstPaymentDate(value) {
+  if (!value) return null;
+  const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return undefined;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
+    ? value
+    : undefined;
+}
+
+function formatDate(value) {
+  if (!value) {
+    return "Não definida";
+  }
+
+  const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return match ? `${match[3]}/${match[2]}/${match[1]}` : "Não definida";
+}
+
+function getClientForm(client) {
+  return {
+    name: client.name || "",
+    origin: client.origin || "",
+    account_id: client.account_id || "",
+    active: Boolean(client.active),
+    payment_method: client.payment_method || "auto",
+    monthly_fee: formatMonthlyFee(client.monthly_fee),
+    first_payment_date: client.first_payment_date || "",
+    entry_date: client.entry_date || client.created_at?.slice(0, 10) || "",
+    exit_date: client.exit_date || "",
+  };
+}
+
+function ReadOnlyField({ label, children }) {
+  return (
+    <div className="min-w-0 rounded-lg border bg-background px-3 py-2.5">
+      <dt className="text-xs font-medium text-muted-foreground">{label}</dt>
+      <dd className="mt-1 break-words text-sm font-medium">{children || "Não definido"}</dd>
+    </div>
+  );
 }
 
 export default function Settings() {
@@ -111,6 +164,9 @@ export default function Settings() {
     useState(false);
 
   const [modalOpen, setModalOpen] =
+    useState(false);
+
+  const [viewMode, setViewMode] =
     useState(false);
 
   const [saving, setSaving] =
@@ -138,17 +194,16 @@ export default function Settings() {
   const [logoPreview, setLogoPreview] =
     useState("");
 
-  const [removeLogoRequested, setRemoveLogoRequested] =
-    useState(false);
+  const logoInputRef = useRef(null);
 
   const [searchTerm, setSearchTerm] =
     useState("");
 
   const [statusFilter, setStatusFilter] =
-    useState("all");
+    useState("active");
 
   const [originFilter, setOriginFilter] =
-    useState("all");
+    useState("SJ Marketing");
 
   useEffect(() => {
     return () => {
@@ -267,10 +322,8 @@ export default function Settings() {
 
   const displayedLogo =
     logoPreview ||
-    (!removeLogoRequested
-      ? editingClient?.logo_url ||
-        ""
-      : "");
+    editingClient?.logo_url ||
+    "";
 
   const logoInitial =
     String(
@@ -283,44 +336,50 @@ export default function Settings() {
 
   const hasActiveFilters =
     Boolean(searchTerm.trim()) ||
-    statusFilter !== "all" ||
-    originFilter !== "all";
+    statusFilter !== "active" ||
+    originFilter !== "SJ Marketing";
 
   const resetFilters = () => {
     setSearchTerm("");
-    setStatusFilter("all");
-    setOriginFilter("all");
+    setStatusFilter("active");
+    setOriginFilter("SJ Marketing");
   };
 
   const resetModal = () => {
     setEditingClient(null);
+    setViewMode(false);
     setForm(EMPTY_FORM);
     setLogoFile(null);
     setLogoPreview("");
-    setRemoveLogoRequested(false);
     setDeleteConfirmOpen(false);
   };
 
   const openCreateModal = () => {
     resetModal();
+    setForm({
+      ...EMPTY_FORM,
+      entry_date: getTodayDate(),
+    });
     setModalOpen(true);
   };
 
-  const openEditModal = (client) => {
+  const openClientModal = (client) => {
     setEditingClient(client);
-
-    setForm({
-      name:
-        client.name || "",
-      origin:
-        client.origin || "",
-      account_id:
-        client.account_id || "",
-      active:
-        Boolean(client.active),
-    });
-
+    setForm(getClientForm(client));
+    setViewMode(true);
     setModalOpen(true);
+  };
+
+  const cancelEdit = () => {
+    if (isEditing) {
+      setForm(getClientForm(editingClient));
+      setLogoFile(null);
+      setLogoPreview("");
+      setViewMode(true);
+      return;
+    }
+
+    closeModal();
   };
 
   const closeModal = () => {
@@ -387,18 +446,7 @@ export default function Settings() {
       setLogoPreview(
         URL.createObjectURL(file)
       );
-      setRemoveLogoRequested(false);
     };
-
-  const handleRemoveLogo = () => {
-    setLogoFile(null);
-    setLogoPreview("");
-    setRemoveLogoRequested(
-      Boolean(
-        editingClient?.logo_url
-      )
-    );
-  };
 
   const validateForm = () => {
     if (!form.name.trim()) {
@@ -420,6 +468,24 @@ export default function Settings() {
           "Selecione Avaloon ou SJ Marketing.",
       });
 
+      return false;
+    }
+
+    if (parseMonthlyFee(form.monthly_fee) === undefined) {
+      toast({
+        variant: "warning",
+        title: "Mensalidade inválida",
+        description: "Informe um valor em reais válido e não negativo.",
+      });
+      return false;
+    }
+
+    if (parseFirstPaymentDate(form.first_payment_date) === undefined) {
+      toast({
+        variant: "warning",
+        title: "Data de pagamento inválida",
+        description: "Informe uma data válida para o primeiro pagamento.",
+      });
       return false;
     }
 
@@ -457,6 +523,21 @@ export default function Settings() {
 
           active:
             form.active,
+
+          payment_method:
+            form.payment_method,
+
+          monthly_fee:
+            parseMonthlyFee(form.monthly_fee),
+
+          first_payment_date:
+            parseFirstPaymentDate(form.first_payment_date),
+
+          entry_date:
+            form.entry_date || undefined,
+
+          exit_date:
+            form.exit_date || null,
         };
 
         let savedClient;
@@ -483,14 +564,6 @@ export default function Settings() {
               await uploadClientLogo(
                 savedClient.id,
                 logoFile
-              );
-          } else if (
-            isEditing &&
-            removeLogoRequested
-          ) {
-            savedClient =
-              await removeClientLogo(
-                savedClient.id
               );
           }
         } catch (error) {
@@ -526,8 +599,16 @@ export default function Settings() {
           });
         }
 
-        setModalOpen(false);
-        resetModal();
+        if (isEditing) {
+          setEditingClient(savedClient);
+          setForm(getClientForm(savedClient));
+          setLogoFile(null);
+          setLogoPreview("");
+          setViewMode(true);
+        } else {
+          setModalOpen(false);
+          resetModal();
+        }
       } catch (error) {
         toast({
           variant: "destructive",
@@ -992,116 +1073,39 @@ export default function Settings() {
                         </button>
                       </div>
                     ) : (
-                      <div className="mt-5 overflow-hidden rounded-xl border bg-card shadow-sm">
-                        <div className="divide-y">
-                          {filteredClients.map(
-                            (
-                              client
-                            ) => {
-                              const account =
-                                accounts.find(
-                                  (
-                                    item
-                                  ) =>
-                                    item.id ===
-                                    client.account_id
-                                );
-
-                              return (
-                                <div
-                                  key={
-                                    client.id
-                                  }
-                                  className="flex flex-col gap-4 px-5 py-5 transition-colors hover:bg-muted/30 sm:flex-row sm:items-center"
-                                >
-                                  <div className="flex min-w-0 flex-1 items-center gap-3">
-                                    <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-muted">
-                                      {client.logo_url ? (
-                                        <img
-                                          src={
-                                            client.logo_url
-                                          }
-                                          alt=""
-                                          className="h-full w-full object-cover"
-                                        />
-                                      ) : (
-                                        <span className="text-lg font-semibold text-muted-foreground">
-                                          {String(
-                                            client.name ||
-                                              "?"
-                                          )
-                                            .charAt(
-                                              0
-                                            )
-                                            .toUpperCase()}
-                                        </span>
-                                      )}
-                                    </div>
-
-                                    <div className="min-w-0">
-                                      <div className="flex flex-wrap items-center gap-2">
-                                        <div className="truncate font-semibold">
-                                          {
-                                            client.name
-                                          }
-                                        </div>
-
-                                        <span
-                                          className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${getOriginBadgeClass(
-                                            client.origin
-                                          )}`}
-                                        >
-                                          {client.origin ||
-                                            "Sem origem"}
-                                        </span>
-
-                                        <span
-                                          className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${getActiveBadgeClass(
-                                            client.active
-                                          )}`}
-                                        >
-                                          {client.active
-                                            ? "Ativo"
-                                            : "Inativo"}
-                                        </span>
-                                      </div>
-
-                                      <div className="mt-1 truncate text-xs text-muted-foreground">
-                                        {client.account_id
-                                          ? account?.name ||
-                                            "Conta Meta não encontrada"
-                                          : "Sem conta Meta vinculada"}
-                                      </div>
-
-                                      <div className="mt-0.5 text-[11px] text-muted-foreground">
-                                        {client.account_id
-                                          ? `${client.account_id} · ${
-                                              client.currency ||
-                                              "BRL"
-                                            }`
-                                          : "Vinculação pendente"}
-                                      </div>
-                                    </div>
-                                  </div>
-
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      openEditModal(
-                                        client
-                                      )
-                                    }
-                                    className="inline-flex h-9 items-center justify-center gap-2 self-start rounded-md border bg-background px-3 text-sm font-medium transition-colors hover:bg-muted sm:self-auto"
-                                  >
-                                    <Pencil className="h-4 w-4" />
-
-                                    Editar
-                                  </button>
-                                </div>
-                              );
-                            }
-                          )}
-                        </div>
+                      <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                        {filteredClients.map((client) => (
+                          <button
+                            key={client.id}
+                            type="button"
+                            onClick={() => openClientModal(client)}
+                            aria-label={`Ver detalhes de ${client.name}`}
+                            className="group flex min-h-[76px] w-full min-w-0 items-center gap-3 rounded-xl border bg-card p-3 text-left shadow-sm transition-colors hover:border-primary/40 hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                          >
+                            <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-muted">
+                              {client.logo_url ? (
+                                <img
+                                  src={client.logo_url}
+                                  alt=""
+                                  className="h-full w-full object-contain p-1"
+                                />
+                              ) : (
+                                <span className="text-lg font-semibold text-muted-foreground">
+                                  {String(client.name || "?").charAt(0).toUpperCase()}
+                                </span>
+                              )}
+                            </div>
+                            <span className="flex min-w-0 flex-1 items-center gap-2">
+                              <span
+                                aria-label={client.active ? "Ativo" : "Inativo"}
+                                className={`h-2.5 w-2.5 shrink-0 rounded-full ${client.active ? "bg-emerald-500" : "bg-zinc-400 dark:bg-zinc-500"}`}
+                              />
+                              <span className="min-w-0 whitespace-normal break-words text-sm font-semibold text-foreground group-hover:text-primary">
+                                {client.name}
+                              </span>
+                            </span>
+                          </button>
+                        ))}
                       </div>
                     )}
                   </section>
@@ -1171,7 +1175,7 @@ export default function Settings() {
         </div>
       </div>
 
-      {/* Modal de criação e edição */}
+      {/* Modal de visualização, criação e edição */}
       {modalOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
@@ -1186,180 +1190,170 @@ export default function Settings() {
             onMouseDown={(event) =>
               event.stopPropagation()
             }
-            className="w-full max-w-md rounded-xl border bg-card shadow-2xl"
+            className="max-h-[90vh] w-full max-w-2xl overflow-hidden rounded-xl border bg-card shadow-2xl"
           >
             <div className="flex items-center justify-between border-b px-6 py-4">
               <h2
                 id="client-modal-title"
-                className="text-xl font-semibold"
+                className="min-w-0 truncate text-xl font-semibold"
               >
-                {isEditing
-                  ? "Editar cliente"
-                  : "Criar cliente"}
+                {viewMode
+                  ? editingClient.name
+                  : isEditing
+                    ? "Editar cliente"
+                    : "Criar cliente"}
               </h2>
 
-              <button
-                type="button"
-                onClick={
-                  closeModal
-                }
-                disabled={saving}
-                aria-label="Fechar"
-                className="inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
-              >
-                <X className="h-5 w-5" />
-              </button>
+              <div className="ml-3 flex shrink-0 items-center gap-1">
+                {viewMode && isEditing && (
+                  <button
+                    type="button"
+                    onClick={() => setViewMode(false)}
+                    aria-label="Editar cliente"
+                    title="Editar cliente"
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={closeModal}
+                  disabled={saving}
+                  aria-label="Fechar"
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
             </div>
 
+            {viewMode && isEditing ? (
+              <div className="max-h-[calc(90vh-73px)] space-y-5 overflow-y-auto px-6 py-5">
+                <div className="flex items-center gap-4">
+                  <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-xl border bg-muted">
+                    {editingClient.logo_url ? (
+                      <img
+                        src={editingClient.logo_url}
+                        alt={`Logo de ${editingClient.name}`}
+                        className="h-full w-full object-contain p-1"
+                      />
+                    ) : (
+                      <span className="text-xl font-semibold text-muted-foreground">{logoInitial}</span>
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="truncate text-lg font-semibold">{editingClient.name}</p>
+                    <span className="mt-1 inline-flex items-center gap-2 text-sm text-muted-foreground">
+                      <span className={`h-2.5 w-2.5 rounded-full ${editingClient.active ? "bg-emerald-500" : "bg-zinc-400 dark:bg-zinc-500"}`} />
+                      {editingClient.active ? "Ativo" : "Inativo"}
+                    </span>
+                  </div>
+                </div>
+
+                <dl className="grid gap-3 sm:grid-cols-2">
+                  <ReadOnlyField label="Origem">{editingClient.origin || "Não definida"}</ReadOnlyField>
+                  <ReadOnlyField label="Status">{editingClient.active ? "Ativo" : "Inativo"}</ReadOnlyField>
+                  <div className="grid grid-cols-2 gap-3 sm:col-span-2">
+                    <ReadOnlyField label="Valor da mensalidade">
+                      {editingClient.monthly_fee == null ? "Não definido" : `R$ ${formatMonthlyFee(editingClient.monthly_fee)}`}
+                    </ReadOnlyField>
+                    <ReadOnlyField label="Data de pgmt.">
+                      {formatDate(editingClient.first_payment_date)}
+                    </ReadOnlyField>
+                  </div>
+                  <ReadOnlyField label="Data de entrada">{formatDate(editingClient.entry_date || editingClient.created_at)}</ReadOnlyField>
+                  <ReadOnlyField label="Data de saída">{formatDate(editingClient.exit_date)}</ReadOnlyField>
+                  <ReadOnlyField label="Conta Meta">
+                    {editingClient.account_id
+                      ? accounts.find((account) => account.id === editingClient.account_id)?.name || "Conta não encontrada"
+                      : "Sem conta vinculada"}
+                  </ReadOnlyField>
+                  <ReadOnlyField label="Identificador da conta">
+                    {editingClient.account_id || "Não vinculada"}
+                  </ReadOnlyField>
+                  <ReadOnlyField label="Moeda">{editingClient.currency || "BRL"}</ReadOnlyField>
+                  <ReadOnlyField label="Forma de pagamento">
+                    {PAYMENT_METHOD_LABELS[editingClient.payment_method || "auto"] || "Não identificada"}
+                  </ReadOnlyField>
+                  <ReadOnlyField label="Cadastro criado em">{formatDate(editingClient.created_at)}</ReadOnlyField>
+                  <ReadOnlyField label="Conta sincronizada em">{formatDate(editingClient.last_synced_at)}</ReadOnlyField>
+                  <ReadOnlyField label="Cadastro atualizado em">{formatDate(editingClient.updated_at)}</ReadOnlyField>
+                </dl>
+              </div>
+            ) : (
             <form
               onSubmit={
                 handleSaveClient
               }
             >
-              <div className="space-y-4 px-6 py-5">
-                <div>
-                  <label
-                    htmlFor="client-name"
-                    className="text-sm font-medium"
-                  >
-                    Nome do cliente
-                  </label>
-
-                  <input
-                    id="client-name"
-                    type="text"
-                    value={form.name}
-                    onChange={(event) =>
-                      setForm(
-                        (current) => ({
-                          ...current,
-                          name:
-                            event
-                              .target
-                              .value,
-                        })
-                      )
-                    }
-                    placeholder="Ex.: Agência do Óleo"
-                    autoFocus
-                    disabled={saving}
-                    className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
-                  />
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="client-logo"
-                    className="text-sm font-medium"
-                  >
-                    Logo
-                  </label>
-
-                  <div className="mt-2 flex items-center gap-3">
-                    <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-muted">
+              <div className="space-y-3 px-6 py-4">
+                <div className="flex items-center gap-3">
+                  <div className="group relative h-16 w-16 shrink-0">
+                    <div className="flex h-full w-full items-center justify-center overflow-hidden rounded-lg border bg-muted">
                       {displayedLogo ? (
-                        <img
-                          src={
-                            displayedLogo
-                          }
-                          alt=""
-                          className="h-full w-full object-cover"
-                        />
+                        <img src={displayedLogo} alt="" className="h-full w-full object-contain p-1" />
                       ) : (
-                        <span className="text-xl font-semibold text-muted-foreground">
-                          {logoInitial}
-                        </span>
+                        <span className="text-xl font-semibold text-muted-foreground">{logoInitial}</span>
                       )}
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => logoInputRef.current?.click()}
+                      disabled={saving}
+                      aria-label="Editar logo"
+                      className="absolute inset-0 flex items-center justify-center rounded-lg bg-black/45 text-white opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 disabled:cursor-not-allowed"
+                    >
+                      <Pencil className="h-5 w-5" />
+                    </button>
+                    <input
+                      ref={logoInputRef}
+                      id="client-logo"
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      disabled={saving}
+                      onClick={(event) => {
+                        event.currentTarget.value = "";
+                      }}
+                      onChange={handleLogoChange}
+                      className="sr-only"
+                    />
+                  </div>
 
-                    <div className="flex flex-wrap gap-2">
-                      <label
-                        htmlFor="client-logo"
-                        className="inline-flex h-9 cursor-pointer items-center justify-center gap-2 rounded-md border bg-background px-3 text-sm font-medium transition-colors hover:bg-muted"
-                      >
-                        <ImagePlus className="h-4 w-4" />
-
-                        {displayedLogo
-                          ? "Trocar logo"
-                          : "Escolher logo"}
-                      </label>
-
-                      <input
-                        id="client-logo"
-                        type="file"
-                        accept="image/png,image/jpeg,image/webp"
+                  <div className="flex min-w-0 flex-1 items-center gap-3">
+                    <input
+                      id="client-name"
+                      type="text"
+                      value={form.name}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          name: event.target.value,
+                        }))
+                      }
+                      placeholder="Nome do cliente"
+                      autoFocus
+                      disabled={saving}
+                      aria-label="Nome do cliente"
+                      className="h-10 min-w-0 flex-1 rounded-md border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
+                    />
+                    <div className="flex shrink-0 items-center gap-2">
+                      <span className="text-xs font-medium text-muted-foreground">
+                        {form.active ? "Ativo" : "Inativo"}
+                      </span>
+                      <Switch
+                        checked={form.active}
                         disabled={saving}
-                        onClick={(event) => {
-                          event.currentTarget.value =
-                            "";
-                        }}
-                        onChange={
-                          handleLogoChange
+                        aria-label={form.active ? "Desativar cliente" : "Ativar cliente"}
+                        onCheckedChange={(value) =>
+                          setForm((current) => ({
+                            ...current,
+                            active: value,
+                          }))
                         }
-                        className="sr-only"
                       />
-
-                      {displayedLogo && (
-                        <button
-                          type="button"
-                          onClick={
-                            handleRemoveLogo
-                          }
-                          disabled={saving}
-                          className="inline-flex h-9 items-center justify-center rounded-md border bg-background px-3 text-sm font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          Remover
-                        </button>
-                      )}
                     </div>
                   </div>
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="client-origin"
-                    className="text-sm font-medium"
-                  >
-                    Origem
-                  </label>
-
-                  <select
-                    id="client-origin"
-                    value={form.origin}
-                    onChange={(event) =>
-                      setForm(
-                        (current) => ({
-                          ...current,
-                          origin:
-                            event
-                              .target
-                              .value,
-                        })
-                      )
-                    }
-                    disabled={saving}
-                    className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {!isEditing && (
-                      <option
-                        value=""
-                        disabled
-                      >
-                        Selecione a origem
-                      </option>
-                    )}
-
-                    {ORIGINS.map(
-                      (origin) => (
-                        <option
-                          key={origin}
-                          value={origin}
-                        >
-                          {origin}
-                        </option>
-                      )
-                    )}
-                  </select>
                 </div>
 
                 <div>
@@ -1411,28 +1405,173 @@ export default function Settings() {
                   </select>
                 </div>
 
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <div>
+                    <label
+                      htmlFor="client-origin"
+                      className="text-sm font-medium"
+                    >
+                      Origem
+                    </label>
 
-                <div className="flex items-center justify-between rounded-lg border px-4 py-3">
-                  <div className="text-sm font-medium">
-                    Cliente ativo
+                    <select
+                      id="client-origin"
+                      value={form.origin}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          origin: event.target.value,
+                        }))
+                      }
+                      disabled={saving}
+                      className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {!isEditing && (
+                        <option value="" disabled>
+                          Selecione a origem
+                        </option>
+                      )}
+                      {ORIGINS.map((origin) => (
+                        <option key={origin} value={origin}>
+                          {origin}
+                        </option>
+                      ))}
+                    </select>
                   </div>
 
-                  <Switch
-                    checked={form.active}
-                    disabled={saving}
-                    onCheckedChange={(
-                      value
-                    ) =>
-                      setForm(
-                        (current) => ({
+                  <div>
+                    <label
+                      htmlFor="client-monthly-fee"
+                      className="text-sm font-medium"
+                    >
+                      Valor da mensalidade (R$)
+                    </label>
+                    <input
+                      id="client-monthly-fee"
+                      type="text"
+                      inputMode="decimal"
+                      autoComplete="off"
+                      value={form.monthly_fee}
+                      onChange={(event) =>
+                        setForm((current) => ({
                           ...current,
-                          active:
-                            value,
-                        })
-                      )
-                    }
-                  />
+                          monthly_fee: event.target.value,
+                        }))
+                      }
+                      onBlur={() => {
+                        const amount = parseMonthlyFee(form.monthly_fee);
+                        if (amount !== null && amount !== undefined) {
+                          setForm((current) => ({
+                            ...current,
+                            monthly_fee: formatMonthlyFee(amount),
+                          }));
+                        }
+                      }}
+                      disabled={saving}
+                      placeholder="0,00"
+                      className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
+                    />
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="client-first-payment-date"
+                      className="text-sm font-medium"
+                    >
+                      Data de pgmt.
+                    </label>
+                    <input
+                      id="client-first-payment-date"
+                      type="date"
+                      value={form.first_payment_date}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          first_payment_date: event.target.value,
+                        }))
+                      }
+                      disabled={saving}
+                      className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
+                    />
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {editingClient?.billing_day && !editingClient?.first_payment_date
+                        ? `Regra anterior: dia ${editingClient.billing_day}; ela segue ativa até definir o primeiro pagamento.`
+                        : "Primeiro pagamento; as próximas cobranças seguem o mesmo dia mensal."}
+                    </p>
+                  </div>
                 </div>
+
+                <div>
+                  <label
+                    htmlFor="client-payment-method"
+                    className="text-sm font-medium"
+                  >
+                    Forma de pagamento
+                  </label>
+                  <select
+                    id="client-payment-method"
+                    value={form.payment_method}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        payment_method: event.target.value,
+                      }))
+                    }
+                    disabled={saving}
+                    className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {Object.entries(PAYMENT_METHOD_LABELS).map(([value, label]) => (
+                      <option key={value} value={value}>{label}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <label
+                      htmlFor="client-entry-date"
+                      className="text-sm font-medium"
+                    >
+                      Data de entrada
+                    </label>
+                    <input
+                      id="client-entry-date"
+                      type="date"
+                      value={form.entry_date}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          entry_date: event.target.value,
+                        }))
+                      }
+                      disabled={saving}
+                      className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
+                    />
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="client-exit-date"
+                      className="text-sm font-medium"
+                    >
+                      Data de saída
+                    </label>
+                    <input
+                      id="client-exit-date"
+                      type="date"
+                      value={form.exit_date}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          exit_date: event.target.value,
+                        }))
+                      }
+                      disabled={saving}
+                      className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
+                    />
+                  </div>
+                </div>
+
+
               </div>
 
               <div
@@ -1462,9 +1601,7 @@ export default function Settings() {
                 <div className="flex gap-3">
                   <button
                     type="button"
-                    onClick={
-                      closeModal
-                    }
+                    onClick={cancelEdit}
                     disabled={saving}
                     className="inline-flex h-10 items-center justify-center rounded-md border bg-background px-4 text-sm font-medium transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
                   >
@@ -1489,6 +1626,7 @@ export default function Settings() {
                 </div>
               </div>
             </form>
+            )}
           </div>
         </div>
       )}

@@ -128,9 +128,6 @@ export default function LeadsDashboard() {
         <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
           <div>
             <h1 className="text-2xl font-bold tracking-tight md:text-3xl">Dashboard</h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Acompanhe conversas iniciadas, custo por lead e investimento no Meta Ads.
-            </p>
           </div>
           <div className="flex flex-wrap gap-3">
             <AccountSelect

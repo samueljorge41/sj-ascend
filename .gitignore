@@ -41,6 +41,14 @@ base44/.app.jsonc
 *.db
 *.db-shm
 *.db-wal
+/server/database/data/
+
+# Local WhatsApp credential encryption key
+server/.whatsapp-session-key
+
+# Local scratch files
+/tmp/
+/.acquisition-analytics-check.mjs
 
 # Uploaded files
 server/database/data/uploads/

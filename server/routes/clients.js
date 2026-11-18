@@ -85,6 +85,59 @@ const ALLOWED_ORIGINS = [
   "SJ Marketing",
 ];
 
+const ALLOWED_PAYMENT_METHODS = [
+  "auto",
+  "prepaid",
+  "credit_card",
+  "other",
+  "unknown",
+];
+
+function isValidDate(value) {
+  if (value === null || value === "") {
+    return true;
+  }
+
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(date.getTime()) &&
+    date.toISOString().slice(0, 10) === value;
+}
+
+function parseMonthlyFee(value) {
+  if (value === null || value === "") {
+    return null;
+  }
+
+  const amount = Number(value);
+  return Number.isFinite(amount) && amount >= 0
+    ? amount
+    : undefined;
+}
+
+function parseBillingDay(value) {
+  if (value === null || value === "") {
+    return null;
+  }
+
+  if (typeof value !== "number" && !/^\d+$/.test(String(value))) {
+    return undefined;
+  }
+
+  const day = typeof value === "number" ? value : Number(value);
+  return Number.isInteger(day) && day >= 1 && day <= 31
+    ? day
+    : undefined;
+}
+
+function parseFirstPaymentDate(value) {
+  if (value === null || value === "") return null;
+  return isValidDate(value) ? value : undefined;
+}
+
 function formatClient(
   client,
   req
@@ -242,6 +295,12 @@ router.get("/", (req, res) => {
           currency,
           origin,
           active,
+          payment_method,
+          monthly_fee,
+          billing_day,
+          first_payment_date,
+          entry_date,
+          exit_date,
           last_synced_at,
           created_at,
           updated_at
@@ -313,6 +372,12 @@ router.post("/", (req, res) => {
       currency = "BRL",
       origin = "",
       active = false,
+      payment_method = "auto",
+      monthly_fee = null,
+      billing_day = null,
+      first_payment_date = null,
+      entry_date,
+      exit_date = null,
     } = req.body;
 
     const normalizedAccountId =
@@ -324,6 +389,22 @@ router.post("/", (req, res) => {
 
     const normalizedOrigin =
       String(origin || "").trim();
+
+    const normalizedPaymentMethod =
+      String(payment_method || "auto");
+    const normalizedMonthlyFee =
+      parseMonthlyFee(monthly_fee);
+    const normalizedBillingDay =
+      parseBillingDay(billing_day);
+    const normalizedFirstPaymentDate =
+      parseFirstPaymentDate(first_payment_date);
+    const normalizedEffectiveBillingDay = normalizedFirstPaymentDate
+      ? Number(normalizedFirstPaymentDate.slice(-2))
+      : normalizedBillingDay;
+    const normalizedEntryDate =
+      entry_date === undefined
+        ? db.prepare("SELECT date('now') AS date").get().date
+        : entry_date;
 
     if (!normalizedName) {
       return res.status(400).json({
@@ -344,6 +425,29 @@ router.post("/", (req, res) => {
       });
     }
 
+    if (
+      !ALLOWED_PAYMENT_METHODS.includes(
+        normalizedPaymentMethod
+      )
+    ) {
+      return res.status(400).json({
+        error:
+          "Forma de pagamento invÃ¡lida.",
+      });
+    }
+
+    if (
+      normalizedMonthlyFee === undefined ||
+      normalizedBillingDay === undefined ||
+      normalizedFirstPaymentDate === undefined ||
+      !isValidDate(normalizedEntryDate) ||
+      !isValidDate(exit_date)
+    ) {
+      return res.status(400).json({
+        error: "Informe uma mensalidade válida e datas válidas.",
+      });
+    }
+
     const result = db
       .prepare(`
         INSERT INTO clients (
@@ -352,9 +456,15 @@ router.post("/", (req, res) => {
           logo_url,
           currency,
           origin,
-          active
+          active,
+          payment_method,
+          monthly_fee,
+          billing_day,
+          first_payment_date,
+          entry_date,
+          exit_date
         )
-        VALUES (?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .run(
         normalizedAccountId,
@@ -362,7 +472,13 @@ router.post("/", (req, res) => {
         String(logo_url || ""),
         String(currency || "BRL"),
         normalizedOrigin,
-        active ? 1 : 0
+        active ? 1 : 0,
+        normalizedPaymentMethod,
+        normalizedMonthlyFee,
+        normalizedEffectiveBillingDay,
+        normalizedFirstPaymentDate,
+        normalizedEntryDate,
+        exit_date || null
       );
 
     const client = db
@@ -795,6 +911,67 @@ router.patch("/:id", (req, res) => {
             existingClient.active
           );
 
+    const paymentMethod =
+      req.body.payment_method !==
+      undefined
+        ? String(req.body.payment_method)
+        : existingClient.payment_method ||
+          "auto";
+    const monthlyFee =
+      req.body.monthly_fee !== undefined
+        ? parseMonthlyFee(req.body.monthly_fee)
+        : existingClient.monthly_fee;
+    const firstPaymentDate =
+      req.body.first_payment_date !== undefined
+        ? parseFirstPaymentDate(req.body.first_payment_date)
+        : existingClient.first_payment_date || null;
+    const billingDay =
+      req.body.first_payment_date !== undefined
+        ? firstPaymentDate
+          ? Number(firstPaymentDate.slice(-2))
+          : existingClient.first_payment_date
+            ? null
+            : existingClient.billing_day
+        : req.body.billing_day !== undefined
+          ? parseBillingDay(req.body.billing_day)
+          : existingClient.billing_day;
+    const entryDate =
+      req.body.entry_date !== undefined
+        ? req.body.entry_date || null
+        : existingClient.entry_date ||
+          db.prepare("SELECT date(created_at) AS date FROM clients WHERE id = ?").get(clientId).date;
+    const requestedExitDate =
+      req.body.exit_date !== undefined
+        ? req.body.exit_date || null
+        : existingClient.exit_date || null;
+    const transitioningToInactive =
+      Boolean(existingClient.active) && !active;
+    const transitioningToActive =
+      !Boolean(existingClient.active) && active;
+    const manuallyChangedExitDate =
+      req.body.exit_date !== undefined &&
+      Boolean(requestedExitDate) &&
+      requestedExitDate !== (existingClient.exit_date || null);
+    const today =
+      db.prepare("SELECT date('now') AS date").get().date;
+    const exitDate =
+      transitioningToActive
+        ? null
+        : transitioningToInactive
+          ? manuallyChangedExitDate
+            ? requestedExitDate
+            : today
+          : requestedExitDate;
+    const newPeriodStart =
+      transitioningToActive
+        ? req.body.entry_date !== undefined &&
+          req.body.entry_date !== existingClient.entry_date &&
+          isValidDate(entryDate) &&
+          Boolean(entryDate)
+          ? entryDate
+          : today
+        : null;
+
     if (!name) {
       return res.status(400).json({
         error:
@@ -814,26 +991,157 @@ router.patch("/:id", (req, res) => {
       });
     }
 
-    db.prepare(`
-      UPDATE clients
-      SET
-        account_id = ?,
-        name = ?,
-        logo_url = ?,
-        currency = ?,
-        origin = ?,
-        active = ?,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `).run(
-      accountId,
-      name,
-      logoUrl,
-      currency,
-      origin,
-      active ? 1 : 0,
-      clientId
-    );
+    if (
+      !ALLOWED_PAYMENT_METHODS.includes(
+        paymentMethod
+      )
+    ) {
+      return res.status(400).json({
+        error:
+          "Forma de pagamento invÃ¡lida.",
+      });
+    }
+
+    if (
+      monthlyFee === undefined ||
+      billingDay === undefined ||
+      firstPaymentDate === undefined ||
+      !isValidDate(entryDate) ||
+      !isValidDate(exitDate)
+    ) {
+      return res.status(400).json({
+        error: "Informe uma mensalidade válida e datas válidas.",
+      });
+    }
+
+    db.transaction(() => {
+      db.prepare(`
+        UPDATE clients
+        SET
+          account_id = ?,
+          name = ?,
+          logo_url = ?,
+          currency = ?,
+          origin = ?,
+          active = ?,
+          payment_method = ?,
+          monthly_fee = ?,
+          billing_day = ?,
+          first_payment_date = ?,
+          entry_date = ?,
+          exit_date = ?,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(
+        accountId,
+        name,
+        logoUrl,
+        currency,
+        origin,
+        active ? 1 : 0,
+        paymentMethod,
+        monthlyFee,
+        billingDay,
+        firstPaymentDate,
+        entryDate,
+        exitDate,
+        clientId
+      );
+
+      if (transitioningToInactive) {
+        const openPeriod = db.prepare(`
+          SELECT id
+          FROM client_relationship_periods
+          WHERE client_id = ? AND ended_on IS NULL
+          ORDER BY id DESC
+          LIMIT 1
+        `).get(clientId);
+
+        if (openPeriod) {
+          db.prepare(`
+            UPDATE client_relationship_periods
+            SET
+              started_on = CASE WHEN ? THEN ? ELSE started_on END,
+              ended_on = ?
+            WHERE id = ?
+          `).run(
+            req.body.entry_date !== undefined &&
+              req.body.entry_date !== existingClient.entry_date
+              ? 1
+              : 0,
+            entryDate,
+            exitDate,
+            openPeriod.id
+          );
+        } else if (
+          !existingClient.exit_date &&
+          isValidDate(entryDate) &&
+          exitDate >= entryDate
+        ) {
+          db.prepare(`
+            INSERT INTO client_relationship_periods (
+              client_id, started_on, ended_on, source
+            ) VALUES (?, ?, ?, 'tracked')
+          `).run(clientId, entryDate, exitDate);
+        }
+      } else if (transitioningToActive) {
+        const staleOpenPeriod = db.prepare(`
+          SELECT id, started_on
+          FROM client_relationship_periods
+          WHERE client_id = ? AND ended_on IS NULL
+          ORDER BY id DESC
+          LIMIT 1
+        `).get(clientId);
+
+        if (staleOpenPeriod) {
+          const fallbackEnd = db.prepare(
+            "SELECT date(?, '-1 day') AS date"
+          ).get(newPeriodStart).date;
+          const safeEnd = fallbackEnd >= staleOpenPeriod.started_on
+            ? fallbackEnd
+            : staleOpenPeriod.started_on;
+          db.prepare(`
+            UPDATE client_relationship_periods
+            SET ended_on = ?
+            WHERE id = ?
+          `).run(safeEnd, staleOpenPeriod.id);
+        }
+
+        db.prepare(`
+          INSERT INTO client_relationship_periods (
+            client_id, started_on, ended_on, source
+          ) VALUES (?, ?, NULL, 'tracked')
+        `).run(clientId, newPeriodStart);
+      } else if (
+        req.body.entry_date !== undefined &&
+        req.body.entry_date !== existingClient.entry_date
+      ) {
+        db.prepare(`
+          UPDATE client_relationship_periods
+          SET started_on = ?
+          WHERE client_id = ? AND ended_on IS NULL
+        `).run(entryDate, clientId);
+      }
+
+      if (
+        !active &&
+        !transitioningToInactive &&
+        req.body.exit_date !== undefined &&
+        requestedExitDate !== (existingClient.exit_date || null)
+      ) {
+        db.prepare(`
+          UPDATE client_relationship_periods
+          SET ended_on = ?
+          WHERE id = (
+            SELECT id
+            FROM client_relationship_periods
+            WHERE client_id = ? AND ended_on IS NOT NULL
+            ORDER BY id DESC
+            LIMIT 1
+          )
+        `).run(requestedExitDate, clientId);
+      }
+    })();
 
     const updatedClient = db
       .prepare(`

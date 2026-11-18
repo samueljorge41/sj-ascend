@@ -89,6 +89,24 @@ function normalizeDate(value) {
   return normalizedValue;
 }
 
+function normalizeOptionalTime(value, label) {
+  const normalizedValue = String(value || "").trim();
+  if (!normalizedValue) return null;
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(normalizedValue)) {
+    throw new Error(`${label} deve estar no formato HH:MM.`);
+  }
+  return normalizedValue;
+}
+
+function validateTimeRange(startTime, endTime) {
+  if ((startTime && !endTime) || (!startTime && endTime)) {
+    throw new Error("Informe os horários de início e término.");
+  }
+  if (startTime && endTime <= startTime) {
+    throw new Error("O término deve ser depois do início.");
+  }
+}
+
 function getClient(clientId) {
   return db
     .prepare(`
@@ -110,6 +128,8 @@ function getDemand(demandId) {
         title,
         type,
         demand_date,
+        start_time,
+        end_time,
         observation,
         status,
         created_at,
@@ -177,8 +197,15 @@ function isValidationError(error) {
     error.message?.includes(
       "formato YYYY-MM-DD"
     ) ||
+    error.message?.includes(
+      "formato HH:MM"
+    ) ||
     error.message ===
-      "Data inválida."
+      "Data inválida." ||
+    error.message ===
+      "Informe os horários de início e término." ||
+    error.message ===
+      "O término deve ser depois do início."
   );
 }
 
@@ -273,6 +300,8 @@ router.get("/", (req, res) => {
           title,
           type,
           demand_date,
+          start_time,
+          end_time,
           observation,
           status,
           created_at,
@@ -398,6 +427,9 @@ router.post("/", (req, res) => {
       normalizeOptionalText(
         req.body.observation
       );
+    const startTime = normalizeOptionalTime(req.body.start_time, "O início");
+    const endTime = normalizeOptionalTime(req.body.end_time, "O término");
+    validateTimeRange(startTime, endTime);
 
     const status =
       req.body.status
@@ -435,16 +467,20 @@ router.post("/", (req, res) => {
           title,
           type,
           demand_date,
+          start_time,
+          end_time,
           observation,
           status
         )
-        VALUES (?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .run(
         clientId,
         title,
         type,
         demandDate,
+        startTime,
+        endTime,
         observation,
         status
       );
@@ -553,6 +589,14 @@ router.patch("/:id", (req, res) => {
         : existingDemand
             .observation;
 
+    const startTime = req.body.start_time !== undefined
+      ? normalizeOptionalTime(req.body.start_time, "O início")
+      : existingDemand.start_time;
+    const endTime = req.body.end_time !== undefined
+      ? normalizeOptionalTime(req.body.end_time, "O término")
+      : existingDemand.end_time;
+    validateTimeRange(startTime, endTime);
+
     const status =
       req.body.status !==
       undefined
@@ -589,6 +633,8 @@ router.patch("/:id", (req, res) => {
         title = ?,
         type = ?,
         demand_date = ?,
+        start_time = ?,
+        end_time = ?,
         observation = ?,
         status = ?,
         updated_at =
@@ -598,6 +644,8 @@ router.patch("/:id", (req, res) => {
       title,
       type,
       demandDate,
+      startTime,
+      endTime,
       observation,
       status,
       demandId

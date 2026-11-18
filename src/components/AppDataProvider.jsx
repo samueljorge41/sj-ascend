@@ -115,6 +115,12 @@ export default function AppDataProvider({
       return operationsMap;
     }, []);
 
+  const refreshClientDemands = useCallback(async () => {
+    const demands = await getClientDemands();
+    setClientDemands(demands || []);
+    return demands || [];
+  }, []);
+
   const load = useCallback(
     async () => {
       setLoading(true);
@@ -685,7 +691,15 @@ export default function AppDataProvider({
             savedDemand.type ===
               "optimization"
           ) {
-            await reloadOperations();
+            try {
+              await reloadOperations();
+            } catch (refreshError) {
+              // The demand update has already persisted. Keep its success
+              // separate from a failed refresh of the derived operations view.
+              setError(
+                `A demanda foi salva, mas não foi possível atualizar o resumo operacional: ${refreshError.message || "falha ao carregar."}`
+              );
+            }
           }
 
           return savedDemand;
@@ -803,6 +817,7 @@ export default function AppDataProvider({
         error,
 
         refresh: load,
+        refreshClientDemands,
         syncAccounts,
         updateClient,
         removeClient,

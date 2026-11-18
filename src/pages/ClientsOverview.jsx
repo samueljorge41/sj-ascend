@@ -55,6 +55,13 @@ function formatUpdatedAt(value) {
   }).format(date);
 }
 
+function normalizeAccountId(value) {
+  return String(value || "").replace(
+    /^act_/,
+    ""
+  );
+}
+
 const STATUS = {
   green: {
     label: "Campanhas ativas",
@@ -72,6 +79,13 @@ const STATUS = {
     label: "Saldo zerado",
     dot: "bg-amber-500",
   },
+};
+
+const PAYMENT_METHOD_LABEL = {
+  prepaid: "Saldo pré-pago",
+  credit_card: "Cartão",
+  other: "Outra forma de pagamento",
+  unknown: "Não identificado",
 };
 
 function RefreshIcon({ spinning = false }) {
@@ -175,13 +189,6 @@ export default function ClientsOverview() {
             )
         );
 
-      const logos = {};
-
-      activeRecords.forEach((client) => {
-        logos[client.account_id] =
-          client.logo_url || "";
-      });
-
       const accountIds =
         activeRecords.map(
           (client) =>
@@ -191,19 +198,40 @@ export default function ClientsOverview() {
       return {
         activeRecords,
         accountIds,
-        logos,
       };
     }, [clients]);
 
   const addLogos = useCallback(
-    (overviewClients, logos) => {
+    (overviewClients, activeRecords) => {
+      const clientsByAccount =
+        new Map(
+          activeRecords.map((client) => [
+            normalizeAccountId(
+              client.account_id
+            ),
+            client,
+          ])
+        );
+
       return (overviewClients || []).map(
-        (client) => ({
-          ...client,
-          logo_url:
-            logos[client.account_id] ||
-            "",
-        })
+        (client) => {
+          const registeredClient =
+            clientsByAccount.get(
+              normalizeAccountId(
+                client.account_id
+              )
+            );
+
+          return {
+            ...client,
+            name:
+              registeredClient?.name ||
+              client.name ||
+              client.account_id,
+            logo_url:
+              registeredClient?.logo_url || "",
+          };
+        }
       );
     },
     []
@@ -223,7 +251,7 @@ export default function ClientsOverview() {
       try {
         const {
           accountIds,
-          logos,
+          activeRecords,
         } = getActiveData();
 
         if (accountIds.length === 0) {
@@ -255,7 +283,7 @@ export default function ClientsOverview() {
             setList(
               addLogos(
                 memoryCache.clients,
-                logos
+                activeRecords
               )
             );
           }
@@ -274,7 +302,7 @@ export default function ClientsOverview() {
           setList(
             addLogos(
               response.clients,
-              logos
+              activeRecords
             )
           );
         }
@@ -318,7 +346,7 @@ export default function ClientsOverview() {
       try {
         const {
           accountIds,
-          logos,
+          activeRecords,
         } = getActiveData();
 
         if (accountIds.length === 0) {
@@ -346,7 +374,7 @@ export default function ClientsOverview() {
         setList(
           addLogos(
             response.clients,
-            logos
+            activeRecords
           )
         );
       } catch (error) {
@@ -385,7 +413,7 @@ export default function ClientsOverview() {
 
         try {
           const {
-            logos,
+            activeRecords,
           } = getActiveData();
 
           const {
@@ -414,11 +442,11 @@ export default function ClientsOverview() {
             );
           }
 
-          const clientWithLogo = {
-            ...updatedClient,
-            logo_url:
-              logos[accountId] || "",
-          };
+          const clientWithLogo =
+            addLogos(
+              [updatedClient],
+              activeRecords
+            )[0];
 
           setList((currentList) =>
             currentList.map((client) =>
@@ -447,6 +475,7 @@ export default function ClientsOverview() {
         getActiveData,
         getSelectedPeriod,
         fetchOverview,
+        addLogos,
       ]
     );
 
@@ -782,14 +811,25 @@ export default function ClientsOverview() {
 
                       <div>
                         <div className="text-xs text-muted-foreground">
-                          Saldo da conta
+                          {client.payment_method ===
+                          "prepaid"
+                            ? "Saldo da conta"
+                            : "Forma de pagamento"}
                         </div>
 
                         <div className="text-lg font-semibold">
-                          {fmtCurrency(
-                            client.balance,
-                            client.currency
-                          )}
+                          {client.payment_method ===
+                          "prepaid"
+                            ? client.balance_known
+                              ? fmtCurrency(
+                                  client.balance,
+                                  client.currency
+                                )
+                              : "Indisponível"
+                            : PAYMENT_METHOD_LABEL[
+                                client.payment_method
+                              ] ||
+                              "Não identificado"}
                         </div>
                       </div>
                     </div>

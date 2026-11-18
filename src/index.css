@@ -6,6 +6,7 @@
 
 @layer base {
   :root {
+    color-scheme: light;
     --background: 0 0% 100%;
     --foreground: 0 0% 3.9%;
     --card: 0 0% 100%;
@@ -46,6 +47,7 @@
   }
 
   .dark {
+    color-scheme: dark;
     --background: 0 0% 3.9%;
     --foreground: 0 0% 98%;
     --card: 0 0% 3.9%;
@@ -91,4 +93,37 @@
   body {
     @apply bg-background text-foreground font-body;
   }
+}
+
+.finance-client-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--muted-foreground) / 0.4) transparent;
+}
+
+.finance-client-scrollbar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.finance-client-scrollbar::-webkit-scrollbar-track {
+  background: hsl(var(--muted) / 0.55);
+  border-radius: 9999px;
+}
+
+.finance-client-scrollbar::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.4);
+  border: 2px solid hsl(var(--card));
+  border-radius: 9999px;
+}
+
+.finance-client-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--primary) / 0.65);
+}
+
+.kanban-board-scroll {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.kanban-board-scroll::-webkit-scrollbar {
+  display: none;
 }

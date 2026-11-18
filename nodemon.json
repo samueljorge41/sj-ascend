@@ -1,0 +1,6 @@
+{
+  "ignore": [
+    "**/agenda-planning-draft.json",
+    "**/agenda-planning-draft.json.*.tmp"
+  ]
+}
